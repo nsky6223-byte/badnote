@@ -1,32 +1,19 @@
-# React + TypeScript + Vite
+# badnote
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+배드노트웹 — 굿노트처럼 보이지만 필기·드로잉 중 예측불가하게 오작동하는 캐주얼 웹게임.
 
-Currently, two official plugins are available:
+현재 스프린트는 게임 전체가 아니라 패드로 필기·드로잉하는 핵심 엔진 하나만 완성하는 데 집중합니다.
+자세한 내용은 [CLAUDE.md](./CLAUDE.md), [DRAWING_SPEC.md](./DRAWING_SPEC.md) 참고.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 개발
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # 개발 서버
+npm run build    # 프로덕션 빌드 (tsc -b && vite build)
+npm run lint      # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## 스택
+
+Vite + React + TypeScript, Canvas API, perfect-freehand, IndexedDB(`idb`), Vercel 배포.
