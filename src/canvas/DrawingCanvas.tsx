@@ -2,21 +2,20 @@ import { useEffect, useRef } from "react";
 import { normalizePointerEvent, type PointerKind } from "./engine/pointerInput";
 import {
   createStroke,
+  ERASER_RADIUS,
+  erasePartial,
   hitTestStroke,
   redrawAll,
   renderStroke,
   type Stroke,
-  type Tool,
 } from "./engine/strokeEngine";
+import type { DrawSettings } from "../settings";
 
 type Props = {
-  tool: Tool;
-  color: string;
-  penSize: number;
-  eraserSize: number;
+  settings: DrawSettings;
 };
 
-export default function DrawingCanvas({ tool, color, penSize, eraserSize }: Props) {
+export default function DrawingCanvas({ settings }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // 잉크 레이어(확정된 스트로크) / 활성 레이어(지금 그리는 중인 스트로크) 분리 — pointermove마다
   // 전체를 다시 계산해야 하는 perfect-freehand 특성상 성능을 위해 필수.
@@ -33,22 +32,10 @@ export default function DrawingCanvas({ tool, color, penSize, eraserSize }: Prop
   const activePenIdRef = useRef<number | null>(null);
 
   // 이벤트 핸들러(마운트 시 한 번만 등록되는 클로저)가 최신 툴바 값을 읽을 수 있도록 ref로 미러링.
-  const toolRef = useRef(tool);
-  const colorRef = useRef(color);
-  const penSizeRef = useRef(penSize);
-  const eraserSizeRef = useRef(eraserSize);
+  const settingsRef = useRef(settings);
   useEffect(() => {
-    toolRef.current = tool;
-  }, [tool]);
-  useEffect(() => {
-    colorRef.current = color;
-  }, [color]);
-  useEffect(() => {
-    penSizeRef.current = penSize;
-  }, [penSize]);
-  useEffect(() => {
-    eraserSizeRef.current = eraserSize;
-  }, [eraserSize]);
+    settingsRef.current = settings;
+  }, [settings]);
 
   const pendingFrameRef = useRef(false);
   const scheduleFrame = (draw: () => void) => {
@@ -115,12 +102,21 @@ export default function DrawingCanvas({ tool, color, penSize, eraserSize }: Prop
     if (!active) return;
 
     const eraseAt = (x: number, y: number) => {
-      const radius = eraserSizeRef.current;
-      const before = strokesRef.current.length;
-      strokesRef.current = strokesRef.current.filter(
-        (s) => !hitTestStroke(s, x, y, radius),
-      );
-      if (strokesRef.current.length !== before) redrawInk();
+      const s = settingsRef.current;
+      const radius = ERASER_RADIUS[s.eraserLevel];
+
+      if (s.eraserMode === "stroke") {
+        const before = strokesRef.current.length;
+        strokesRef.current = strokesRef.current.filter((st) => !hitTestStroke(st, x, y, radius));
+        if (strokesRef.current.length !== before) redrawInk();
+        return;
+      }
+
+      const { strokes, changed } = erasePartial(strokesRef.current, x, y, radius);
+      if (changed) {
+        strokesRef.current = strokes;
+        redrawInk();
+      }
     };
 
     const handlePointerDown = (e: PointerEvent) => {
@@ -135,16 +131,21 @@ export default function DrawingCanvas({ tool, color, penSize, eraserSize }: Prop
 
       active.setPointerCapture(e.pointerId);
       const point = normalizePointerEvent(e, active);
+      const s = settingsRef.current;
 
-      if (toolRef.current === "eraser") {
+      if (s.tool === "eraser") {
         eraseAt(point.x, point.y);
         return;
       }
 
+      const isHighlighter = s.tool === "highlighter";
       const stroke = createStroke(
-        "pen",
-        colorRef.current,
-        penSizeRef.current,
+        isHighlighter ? "highlighter" : "pen",
+        isHighlighter ? undefined : s.penType,
+        isHighlighter ? s.highlighterColor : s.penColor,
+        isHighlighter ? s.highlighterSize : s.penSize,
+        isHighlighter ? 50 : s.sharpness,
+        isHighlighter ? 0.35 : 1,
         e.pointerType as PointerKind,
       );
       stroke.points.push(point);
@@ -156,8 +157,9 @@ export default function DrawingCanvas({ tool, color, penSize, eraserSize }: Prop
       if (e.pointerType === "touch" && activePenIdRef.current !== null) return;
 
       const point = normalizePointerEvent(e, active);
+      const s = settingsRef.current;
 
-      if (toolRef.current === "eraser") {
+      if (s.tool === "eraser") {
         if (e.buttons === 0) return; // 눌리지 않은 채 지나가는 hover는 무시.
         eraseAt(point.x, point.y);
         return;
