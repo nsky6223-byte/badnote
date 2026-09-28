@@ -83,7 +83,10 @@ function countCorners(points: Pt[]): number {
     turning.push(Math.abs(turningAngle(a, b, c)));
   }
 
-  const threshold = (25 * Math.PI) / 180;
+  // 25°는 너무 낮아서 손떨림으로 인한 원의 미세한 굴곡까지 코너로 잡혔다(예: 반지름
+  // 5%만 흔들려도 turning angle이 40°를 넘는 경우가 있었음). 실제 도형 꼭짓점(사각형
+  // ~90°, 삼각형/별 ~120° 이상)은 여유 있게 넘는 50°로 올려서 노이즈를 걸러낸다.
+  const threshold = (50 * Math.PI) / 180;
   const candidates: number[] = [];
   for (let i = 0; i < n; i++) {
     if (turning[i] < threshold) continue;
@@ -119,7 +122,10 @@ export function classifyShape(rawPoints: Pt[]): ShapeKind | null {
 
   if (corners === 3) return "triangle";
   if (corners === 4) return "rectangle";
-  if (corners >= 8 && corners <= 12) return "star";
+  // 별은 보통 펜을 떼지 않고 꼭짓점 5개를 지그재그로 잇는 방식(오각별, 자기교차 경로)으로
+  // 그려져서 꺾이는 점이 5개뿐이다. 바깥/안쪽 점을 번갈아 도는 윤곽선 방식(점 10개)으로
+  // 그리는 경우도 함께 받아주기 위해 5~12개까지 넓게 별로 인식한다.
+  if (corners >= 5 && corners <= 12) return "star";
   return "circle";
 }
 
