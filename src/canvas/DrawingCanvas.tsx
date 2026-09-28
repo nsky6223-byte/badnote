@@ -27,6 +27,7 @@ export default function DrawingCanvas({ settings }: Props) {
   const strokesRef = useRef<Stroke[]>([]);
   const currentStrokeRef = useRef<Stroke | null>(null);
   const sizeRef = useRef({ width: 0, height: 0 });
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
 
   // 팜 리젝션: pen이 눌려있는 동안 들어오는 touch 포인터는 무시한다.
   const activePenIdRef = useRef<number | null>(null);
@@ -36,6 +37,16 @@ export default function DrawingCanvas({ settings }: Props) {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  // 지우개 크기를 바꾸거나 도구를 전환했을 때, 포인터를 움직이지 않아도 미리보기가 즉시 반영되도록.
+  useEffect(() => {
+    if (settings.tool === "eraser" && lastPointerRef.current) {
+      drawEraserCursor(lastPointerRef.current.x, lastPointerRef.current.y);
+    } else if (settings.tool !== "eraser") {
+      clearActive();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.tool, settings.eraserLevel]);
 
   const pendingFrameRef = useRef(false);
   const scheduleFrame = (draw: () => void) => {
@@ -59,6 +70,23 @@ export default function DrawingCanvas({ settings }: Props) {
     if (!ctx) return;
     ctx.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
     if (stroke) renderStroke(ctx, stroke);
+  };
+
+  const clearActive = () => {
+    activeCtxRef.current?.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
+  };
+
+  // 지우개 도구일 때 실제 지워지는 범위를 검은 원 테두리로 미리 보여준다.
+  const drawEraserCursor = (x: number, y: number) => {
+    const ctx = activeCtxRef.current;
+    if (!ctx) return;
+    const radius = ERASER_RADIUS[settingsRef.current.eraserLevel];
+    ctx.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   };
 
   // 캔버스 크기 대응: ResizeObserver + devicePixelRatio 스케일링.
@@ -131,10 +159,12 @@ export default function DrawingCanvas({ settings }: Props) {
 
       active.setPointerCapture(e.pointerId);
       const point = normalizePointerEvent(e, active);
+      lastPointerRef.current = point;
       const s = settingsRef.current;
 
       if (s.tool === "eraser") {
         eraseAt(point.x, point.y);
+        drawEraserCursor(point.x, point.y);
         return;
       }
 
@@ -157,10 +187,12 @@ export default function DrawingCanvas({ settings }: Props) {
       if (e.pointerType === "touch" && activePenIdRef.current !== null) return;
 
       const point = normalizePointerEvent(e, active);
+      lastPointerRef.current = point;
       const s = settingsRef.current;
 
       if (s.tool === "eraser") {
-        if (e.buttons === 0) return; // 눌리지 않은 채 지나가는 hover는 무시.
+        drawEraserCursor(point.x, point.y);
+        if (e.buttons === 0) return; // 눌리지 않은 채 지나가는 hover는 미리보기만 갱신.
         eraseAt(point.x, point.y);
         return;
       }
@@ -176,21 +208,41 @@ export default function DrawingCanvas({ settings }: Props) {
         activePenIdRef.current = null;
       }
 
+      const s = settingsRef.current;
+      if (s.tool === "eraser") {
+        // 터치는 hover 개념이 없으므로 손을 떼면 미리보기도 사라져야 한다.
+        if (e.pointerType === "touch") {
+          clearActive();
+        } else {
+          const point = normalizePointerEvent(e, active);
+          drawEraserCursor(point.x, point.y);
+        }
+        return;
+      }
+
       const stroke = currentStrokeRef.current;
       currentStrokeRef.current = null;
       if (!stroke || stroke.points.length === 0) return;
 
       strokesRef.current = [...strokesRef.current, stroke];
       redrawInk();
-      activeCtxRef.current?.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
+      clearActive();
+    };
+
+    const handlePointerLeave = (e: PointerEvent) => {
+      // 그리기/지우기 진행 중(포인터 캡처 중)에는 아직 캔버스를 벗어난 게 아니므로 무시.
+      if (active.hasPointerCapture(e.pointerId)) return;
+      clearActive();
     };
 
     active.addEventListener("pointerdown", handlePointerDown);
     active.addEventListener("pointermove", handlePointerMove);
     active.addEventListener("pointerup", finishStroke);
     active.addEventListener("pointercancel", finishStroke);
+    active.addEventListener("pointerleave", handlePointerLeave);
 
     return () => {
+      active.removeEventListener("pointerleave", handlePointerLeave);
       active.removeEventListener("pointerdown", handlePointerDown);
       active.removeEventListener("pointermove", handlePointerMove);
       active.removeEventListener("pointerup", finishStroke);
