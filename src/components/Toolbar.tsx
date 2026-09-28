@@ -20,6 +20,14 @@ const PEN_PALETTE = [
 
 const HIGHLIGHTER_PALETTE = ["#ffe066", "#8ce99a", "#ffa8a8", "#74c0fc", "#ffd8a8"];
 
+const TOOL_LABELS: Record<ToolKind, string> = {
+  pen: "펜",
+  highlighter: "형광펜",
+  shape: "도형",
+  lasso: "올가미",
+  eraser: "지우개",
+};
+
 const PEN_TYPE_LABELS: Record<PenType, string> = {
   fountain: "만년필",
   ballpoint: "볼펜",
@@ -40,15 +48,30 @@ const ERASER_LEVEL_LABELS: Record<EraserSizeLevel, string> = {
 type Props = {
   settings: DrawSettings;
   onChange: (patch: Partial<DrawSettings>) => void;
+  hasSelection: boolean;
+  onCopy: () => void;
+  onCut: () => void;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onRecolor: (color: string) => void;
 };
 
-export default function Toolbar({ settings, onChange }: Props) {
+export default function Toolbar({
+  settings,
+  onChange,
+  hasSelection,
+  onCopy,
+  onCut,
+  onDelete,
+  onDuplicate,
+  onRecolor,
+}: Props) {
   const { tool } = settings;
 
   return (
     <div className="toolbar">
       <div className="toolbar-group">
-        {(["pen", "highlighter", "eraser"] as ToolKind[]).map((t) => (
+        {(Object.keys(TOOL_LABELS) as ToolKind[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -56,7 +79,7 @@ export default function Toolbar({ settings, onChange }: Props) {
             onClick={() => onChange({ tool: t })}
             aria-pressed={tool === t}
           >
-            {t === "pen" ? "펜" : t === "highlighter" ? "형광펜" : "지우개"}
+            {TOOL_LABELS[t]}
           </button>
         ))}
       </div>
@@ -154,6 +177,88 @@ export default function Toolbar({ settings, onChange }: Props) {
               max={30}
               value={settings.highlighterSize}
               onChange={(e) => onChange({ highlighterSize: Number(e.target.value) })}
+            />
+          </div>
+        </>
+      )}
+
+      {tool === "shape" && (
+        <>
+          <div className="toolbar-group">
+            {PEN_PALETTE.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`color-swatch ${settings.shapeColor === c ? "active" : ""}`}
+                style={{ background: c }}
+                onClick={() => onChange({ shapeColor: c })}
+                aria-label={c}
+              />
+            ))}
+            <input
+              type="color"
+              className="color-picker"
+              value={settings.shapeColor}
+              onChange={(e) => onChange({ shapeColor: e.target.value })}
+              aria-label="커스텀 색상"
+            />
+          </div>
+
+          <div className="toolbar-group size-group">
+            <label htmlFor="shape-stroke-width">선 굵기</label>
+            <input
+              id="shape-stroke-width"
+              type="range"
+              min={1}
+              max={16}
+              value={settings.shapeStrokeWidth}
+              onChange={(e) => onChange({ shapeStrokeWidth: Number(e.target.value) })}
+            />
+          </div>
+
+          <span className="toolbar-hint">
+            동그라미·네모·세모·별 모양을 닫힌 도형으로 그리면 자동으로 정리돼요
+          </span>
+        </>
+      )}
+
+      {tool === "lasso" && !hasSelection && (
+        <span className="toolbar-hint">영역을 드래그해서 선택하세요</span>
+      )}
+
+      {tool === "lasso" && hasSelection && (
+        <>
+          <div className="toolbar-group">
+            <button type="button" className="tool-btn" onClick={onCopy}>
+              복사
+            </button>
+            <button type="button" className="tool-btn" onClick={onCut}>
+              오려두기
+            </button>
+            <button type="button" className="tool-btn" onClick={onDuplicate}>
+              복제
+            </button>
+            <button type="button" className="tool-btn" onClick={onDelete}>
+              삭제
+            </button>
+          </div>
+
+          <div className="toolbar-group">
+            {PEN_PALETTE.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className="color-swatch"
+                style={{ background: c }}
+                onClick={() => onRecolor(c)}
+                aria-label={c}
+              />
+            ))}
+            <input
+              type="color"
+              className="color-picker"
+              onChange={(e) => onRecolor(e.target.value)}
+              aria-label="선택 항목 색상 변경"
             />
           </div>
         </>

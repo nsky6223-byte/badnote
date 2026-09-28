@@ -58,3 +58,9 @@
   color: #495057;
   white-space: nowrap;
 }
+
+.toolbar-hint {
+  font-size: 13px;
+  color: #868e96;
+  white-space: nowrap;
+}

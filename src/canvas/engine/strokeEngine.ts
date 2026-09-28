@@ -11,7 +11,7 @@ export type Point = NormalizedPoint;
 
 export type PenType = "fountain" | "ballpoint" | "brush";
 export type StrokeKind = "pen" | "highlighter";
-export type ToolKind = "pen" | "highlighter" | "eraser";
+export type ToolKind = "pen" | "highlighter" | "shape" | "lasso" | "eraser";
 export type EraserMode = "stroke" | "normal";
 export type EraserSizeLevel = "sm" | "md" | "lg";
 
@@ -23,6 +23,7 @@ export const ERASER_RADIUS: Record<EraserSizeLevel, number> = {
 
 export type Stroke = {
   id: string;
+  objectType: "stroke";
   kind: StrokeKind;
   penType?: PenType;
   color: string;
@@ -44,6 +45,7 @@ export function createStroke(
 ): Stroke {
   return {
     id: crypto.randomUUID(),
+    objectType: "stroke",
     kind,
     penType,
     color,
@@ -127,18 +129,6 @@ export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
   ctx.fillStyle = stroke.color;
   ctx.fill(outlineToPath2D(outline));
   ctx.globalAlpha = prevAlpha;
-}
-
-export function redrawAll(
-  ctx: CanvasRenderingContext2D,
-  strokes: Stroke[],
-  width: number,
-  height: number,
-) {
-  ctx.clearRect(0, 0, width, height);
-  for (const stroke of strokes) {
-    renderStroke(ctx, stroke);
-  }
 }
 
 // 획 지우개: 반경 안에 포인트가 하나라도 있으면 스트로크 전체를 삭제한다.

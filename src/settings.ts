@@ -8,6 +8,8 @@ export type DrawSettings = {
   sharpness: number;
   highlighterColor: string;
   highlighterSize: number;
+  shapeColor: string;
+  shapeStrokeWidth: number;
   eraserMode: EraserMode;
   eraserLevel: EraserSizeLevel;
 };
@@ -20,6 +22,8 @@ export const DEFAULT_SETTINGS: DrawSettings = {
   sharpness: 50,
   highlighterColor: "#ffe066",
   highlighterSize: 14,
+  shapeColor: "#1a1a1a",
+  shapeStrokeWidth: 3,
   eraserMode: "normal",
   eraserLevel: "md",
 };
