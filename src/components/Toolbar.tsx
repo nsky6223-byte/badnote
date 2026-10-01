@@ -1,11 +1,14 @@
+import { useRef } from "react";
 import "./Toolbar.css";
-import type { DrawSettings } from "../settings";
+import type { SelectionInfo } from "../canvas/DrawingCanvas";
 import type {
   EraserMode,
   EraserSizeLevel,
   PenType,
   ToolKind,
 } from "../canvas/engine/strokeEngine";
+import type { StickerKind } from "../canvas/engine/stickerEngine";
+import type { DrawSettings } from "../settings";
 
 const PEN_PALETTE = [
   "#1a1a1a",
@@ -19,12 +22,17 @@ const PEN_PALETTE = [
 ];
 
 const HIGHLIGHTER_PALETTE = ["#ffe066", "#8ce99a", "#ffa8a8", "#74c0fc", "#ffd8a8"];
+const LASER_PALETTE = ["#ff3b30", "#30d158", "#0a84ff"];
 
 const TOOL_LABELS: Record<ToolKind, string> = {
   pen: "펜",
   highlighter: "형광펜",
   shape: "도형",
   lasso: "올가미",
+  sticker: "스티커",
+  image: "이미지",
+  text: "텍스트",
+  laser: "레이저",
   eraser: "지우개",
 };
 
@@ -45,28 +53,38 @@ const ERASER_LEVEL_LABELS: Record<EraserSizeLevel, string> = {
   lg: "대",
 };
 
+const STICKER_LABELS: Record<StickerKind, string> = {
+  "postit-white": "흰색 줄글",
+  "postit-yellow": "노란 줄글",
+};
+
 type Props = {
   settings: DrawSettings;
   onChange: (patch: Partial<DrawSettings>) => void;
-  hasSelection: boolean;
+  selection: SelectionInfo;
   onCopy: () => void;
   onCut: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onRecolor: (color: string) => void;
+  onToggleCrop: () => void;
+  onAddImage: (file: File) => void;
 };
 
 export default function Toolbar({
   settings,
   onChange,
-  hasSelection,
+  selection,
   onCopy,
   onCut,
   onDelete,
   onDuplicate,
   onRecolor,
+  onToggleCrop,
+  onAddImage,
 }: Props) {
   const { tool } = settings;
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   return (
     <div className="toolbar">
@@ -222,11 +240,104 @@ export default function Toolbar({
         </>
       )}
 
-      {tool === "lasso" && !hasSelection && (
+      {tool === "sticker" && (
+        <div className="toolbar-group">
+          {(Object.keys(STICKER_LABELS) as StickerKind[]).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`tool-btn ${settings.stickerKind === kind ? "active" : ""}`}
+              onClick={() => onChange({ stickerKind: kind })}
+              aria-pressed={settings.stickerKind === kind}
+            >
+              {STICKER_LABELS[kind]}
+            </button>
+          ))}
+          <span className="toolbar-hint">캔버스를 탭하면 붙여져요</span>
+        </div>
+      )}
+
+      {tool === "image" && (
+        <div className="toolbar-group">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="file-input-hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onAddImage(file);
+              e.target.value = "";
+            }}
+          />
+          <button type="button" className="tool-btn" onClick={() => fileInputRef.current?.click()}>
+            파일 선택
+          </button>
+          <span className="toolbar-hint">
+            모바일은 앨범에서 선택돼요 · 컴퓨터는 드래그 앤 드롭도 가능해요
+          </span>
+        </div>
+      )}
+
+      {tool === "text" && (
+        <>
+          <div className="toolbar-group">
+            {PEN_PALETTE.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`color-swatch ${settings.textColor === c ? "active" : ""}`}
+                style={{ background: c }}
+                onClick={() => onChange({ textColor: c })}
+                aria-label={c}
+              />
+            ))}
+            <input
+              type="color"
+              className="color-picker"
+              value={settings.textColor}
+              onChange={(e) => onChange({ textColor: e.target.value })}
+              aria-label="커스텀 색상"
+            />
+          </div>
+
+          <div className="toolbar-group size-group">
+            <label htmlFor="text-font-size">글자 크기</label>
+            <input
+              id="text-font-size"
+              type="range"
+              min={10}
+              max={48}
+              value={settings.textFontSize}
+              onChange={(e) => onChange({ textFontSize: Number(e.target.value) })}
+            />
+          </div>
+
+          <span className="toolbar-hint">캔버스를 탭하고 입력하세요</span>
+        </>
+      )}
+
+      {tool === "laser" && (
+        <div className="toolbar-group">
+          {LASER_PALETTE.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`color-swatch ${settings.laserColor === c ? "active" : ""}`}
+              style={{ background: c }}
+              onClick={() => onChange({ laserColor: c })}
+              aria-label={c}
+            />
+          ))}
+          <span className="toolbar-hint">누른 채로 움직이면 레이저가 표시되고 서서히 사라져요</span>
+        </div>
+      )}
+
+      {tool === "lasso" && !selection.hasSelection && (
         <span className="toolbar-hint">영역을 드래그해서 선택하세요</span>
       )}
 
-      {tool === "lasso" && hasSelection && (
+      {tool === "lasso" && selection.hasSelection && (
         <>
           <div className="toolbar-group">
             <button type="button" className="tool-btn" onClick={onCopy}>
@@ -241,26 +352,37 @@ export default function Toolbar({
             <button type="button" className="tool-btn" onClick={onDelete}>
               삭제
             </button>
+            {selection.canCrop && (
+              <button
+                type="button"
+                className={`tool-btn ${selection.cropActive ? "active" : ""}`}
+                onClick={onToggleCrop}
+              >
+                {selection.cropActive ? "자르기 완료" : "자르기"}
+              </button>
+            )}
           </div>
 
-          <div className="toolbar-group">
-            {PEN_PALETTE.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className="color-swatch"
-                style={{ background: c }}
-                onClick={() => onRecolor(c)}
-                aria-label={c}
+          {selection.canRecolor && (
+            <div className="toolbar-group">
+              {PEN_PALETTE.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className="color-swatch"
+                  style={{ background: c }}
+                  onClick={() => onRecolor(c)}
+                  aria-label={c}
+                />
+              ))}
+              <input
+                type="color"
+                className="color-picker"
+                onChange={(e) => onRecolor(e.target.value)}
+                aria-label="선택 항목 색상 변경"
               />
-            ))}
-            <input
-              type="color"
-              className="color-picker"
-              onChange={(e) => onRecolor(e.target.value)}
-              aria-label="선택 항목 색상 변경"
-            />
-          </div>
+            </div>
+          )}
         </>
       )}
 

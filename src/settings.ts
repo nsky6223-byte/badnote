@@ -1,4 +1,5 @@
 import type { EraserMode, EraserSizeLevel, PenType, ToolKind } from "./canvas/engine/strokeEngine";
+import type { StickerKind } from "./canvas/engine/stickerEngine";
 
 export type DrawSettings = {
   tool: ToolKind;
@@ -12,6 +13,10 @@ export type DrawSettings = {
   shapeStrokeWidth: number;
   eraserMode: EraserMode;
   eraserLevel: EraserSizeLevel;
+  stickerKind: StickerKind;
+  textColor: string;
+  textFontSize: number;
+  laserColor: string;
 };
 
 export const DEFAULT_SETTINGS: DrawSettings = {
@@ -26,4 +31,8 @@ export const DEFAULT_SETTINGS: DrawSettings = {
   shapeStrokeWidth: 3,
   eraserMode: "normal",
   eraserLevel: "md",
+  stickerKind: "postit-yellow",
+  textColor: "#1a1a1a",
+  textFontSize: 20,
+  laserColor: "#ff3b30",
 };

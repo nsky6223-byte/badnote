@@ -11,7 +11,16 @@ export type Point = NormalizedPoint;
 
 export type PenType = "fountain" | "ballpoint" | "brush";
 export type StrokeKind = "pen" | "highlighter";
-export type ToolKind = "pen" | "highlighter" | "shape" | "lasso" | "eraser";
+export type ToolKind =
+  | "pen"
+  | "highlighter"
+  | "shape"
+  | "lasso"
+  | "sticker"
+  | "image"
+  | "text"
+  | "laser"
+  | "eraser";
 export type EraserMode = "stroke" | "normal";
 export type EraserSizeLevel = "sm" | "md" | "lg";
 

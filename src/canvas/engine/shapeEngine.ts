@@ -186,13 +186,3 @@ export function renderShape(ctx: CanvasRenderingContext2D, shape: ShapeObject) {
   ctx.strokeStyle = shape.color;
   ctx.stroke(shapePath(shape));
 }
-
-// 지우개: 도형은 점 구름이 아니라 파라미터라 부분 삭제가 불가능하므로,
-// 바운딩 박스에 지우개 반경이 닿으면 통째로 지운다.
-export function hitTestShape(shape: ShapeObject, x: number, y: number, radius: number): boolean {
-  const cx = Math.max(shape.x, Math.min(x, shape.x + shape.width));
-  const cy = Math.max(shape.y, Math.min(y, shape.y + shape.height));
-  const dx = x - cx;
-  const dy = y - cy;
-  return dx * dx + dy * dy <= radius * radius;
-}

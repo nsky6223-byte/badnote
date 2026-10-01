@@ -1,17 +1,20 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { normalizePointerEvent, type PointerKind } from "./engine/pointerInput";
+import { createImageObject, cropImage, loadImageFromFile } from "./engine/imageEngine";
 import {
   boundsFromPoints,
   classifyShape,
   createShapeObject,
   type Pt,
 } from "./engine/shapeEngine";
+import { createStickerObject } from "./engine/stickerEngine";
 import {
   createStroke,
   ERASER_RADIUS,
   erasePartial,
   type Stroke,
 } from "./engine/strokeEngine";
+import { createTextObject, type TextObject } from "./engine/textEngine";
 import {
   duplicateObject,
   getBounds,
@@ -29,20 +32,37 @@ import {
 } from "./engine/objectOps";
 import type { DrawSettings } from "../settings";
 
+export type SelectionInfo = {
+  hasSelection: boolean;
+  canRecolor: boolean;
+  canCrop: boolean;
+  cropActive: boolean;
+};
+
+const NO_SELECTION: SelectionInfo = {
+  hasSelection: false,
+  canRecolor: false,
+  canCrop: false,
+  cropActive: false,
+};
+
 export type DrawingCanvasHandle = {
   copySelection: () => void;
   cutSelection: () => void;
   deleteSelection: () => void;
   duplicateSelection: () => void;
   recolorSelection: (color: string) => void;
+  toggleCrop: () => void;
+  addImage: (file: File) => void;
 };
 
 type Props = {
   settings: DrawSettings;
-  onSelectionChange?: (hasSelection: boolean) => void;
+  onSelectionChange?: (info: SelectionInfo) => void;
 };
 
 const HANDLE_SIZE = 14;
+const LASER_FADE_MS = 600;
 
 function getHandleRect(bounds: Bounds): Bounds {
   return {
@@ -52,6 +72,15 @@ function getHandleRect(bounds: Bounds): Bounds {
     height: HANDLE_SIZE,
   };
 }
+
+type EditingText = {
+  original: TextObject | null; // 기존 오브젝트를 편집 중이면 취소 시 복원하기 위해 보관.
+  x: number;
+  y: number;
+  value: string;
+  color: string;
+  fontSize: number;
+};
 
 const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCanvas(
   { settings, onSelectionChange },
@@ -81,10 +110,18 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   const previewBoundsRef = useRef<Bounds | null>(null);
   const pendingPreviewRef = useRef<CanvasObject[] | null>(null);
   const clipboardRef = useRef<CanvasObject[]>([]);
+  const cropModeIdRef = useRef<string | null>(null);
+
+  // 레이저 포인터: 오브젝트로 커밋되지 않는 휘발성 트레일이라 objectsRef와 무관하게 관리.
+  const laserPointsRef = useRef<{ x: number; y: number; t: number }[]>([]);
+  const laserActiveRef = useRef(false);
+  const laserLoopRunningRef = useRef(false);
 
   const sizeRef = useRef({ width: 0, height: 0 });
   const lastPointerRef = useRef<Pt | null>(null);
   const activePenIdRef = useRef<number | null>(null);
+
+  const [editingText, setEditingText] = useState<EditingText | null>(null);
 
   const settingsRef = useRef(settings);
   useEffect(() => {
@@ -146,13 +183,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     if (!ctx) return;
     ctx.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
     ctx.save();
-    ctx.strokeStyle = "#1971c2";
+    ctx.strokeStyle = cropModeIdRef.current ? "#e8590c" : "#1971c2";
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
     ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
     ctx.setLineDash([]);
     const handle = getHandleRect(bounds);
-    ctx.fillStyle = "#1971c2";
+    ctx.fillStyle = cropModeIdRef.current ? "#e8590c" : "#1971c2";
     ctx.fillRect(handle.x, handle.y, handle.width, handle.height);
     ctx.restore();
   };
@@ -189,12 +226,23 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     ctx.restore();
   };
 
+  // 현재 선택에 대해 툴바가 보여줄 수 있는 액션을 계산한다.
+  // (이미지/스티커는 색상 변경이 안 되고, 자르기는 이미지 1개만 선택했을 때만 가능)
+  const computeSelectionInfo = (ids: Set<string>): SelectionInfo => {
+    const selected = objectsRef.current.filter((o) => ids.has(o.id));
+    const canRecolor = selected.some((o) => o.objectType !== "image" && o.objectType !== "sticker");
+    const canCrop = selected.length === 1 && selected[0].objectType === "image";
+    const cropActive = canCrop && cropModeIdRef.current === selected[0].id;
+    return { hasSelection: true, canRecolor, canCrop, cropActive };
+  };
+
   const clearSelection = () => {
     if (!selectedIdsRef.current) return;
     selectedIdsRef.current = null;
     selectionBoundsRef.current = null;
+    cropModeIdRef.current = null;
     clearSelectionLayer();
-    onSelectionChangeRef.current?.(false);
+    onSelectionChangeRef.current?.(NO_SELECTION);
   };
 
   const snapshotSelected = (): CanvasObject[] => {
@@ -290,13 +338,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     const ids = selectedIdsRef.current;
     if (!ids) return;
     cancelDrag();
+    cropModeIdRef.current = null;
     const originals = objectsRef.current.filter((o) => ids.has(o.id));
     const clones = originals.map((o) => duplicateObject(o));
     objectsRef.current = [...objectsRef.current, ...clones];
     redrawInk();
-    selectedIdsRef.current = new Set(clones.map((o) => o.id));
+    const newIds = new Set(clones.map((o) => o.id));
+    selectedIdsRef.current = newIds;
     selectionBoundsRef.current = unionBounds(clones.map(getBounds));
     drawSelectionOverlay(selectionBoundsRef.current);
+    onSelectionChangeRef.current?.(computeSelectionInfo(newIds));
   };
 
   const recolorSelection = (color: string) => {
@@ -310,13 +361,42 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   const pasteClipboard = () => {
     if (clipboardRef.current.length === 0) return;
     cancelDrag();
+    cropModeIdRef.current = null;
     const clones = clipboardRef.current.map((o) => duplicateObject(o));
     objectsRef.current = [...objectsRef.current, ...clones];
     redrawInk();
-    selectedIdsRef.current = new Set(clones.map((o) => o.id));
+    const newIds = new Set(clones.map((o) => o.id));
+    selectedIdsRef.current = newIds;
     selectionBoundsRef.current = unionBounds(clones.map(getBounds));
     drawSelectionOverlay(selectionBoundsRef.current);
-    onSelectionChangeRef.current?.(true);
+    onSelectionChangeRef.current?.(computeSelectionInfo(newIds));
+  };
+
+  const toggleCrop = () => {
+    const ids = selectedIdsRef.current;
+    if (!ids) return;
+    const info = computeSelectionInfo(ids);
+    if (!info.canCrop) return;
+    const [onlyId] = Array.from(ids);
+    cropModeIdRef.current = cropModeIdRef.current === onlyId ? null : onlyId;
+    if (selectionBoundsRef.current) drawSelectionOverlay(selectionBoundsRef.current);
+    onSelectionChangeRef.current?.(computeSelectionInfo(ids));
+  };
+
+  const addImageAt = (file: File, centerX: number, centerY: number) => {
+    loadImageFromFile(file)
+      .then((element) => {
+        const obj = createImageObject(element, centerX, centerY);
+        objectsRef.current = [...objectsRef.current, obj];
+        redrawInk();
+      })
+      .catch(() => {
+        // 잘못된 파일 등으로 로드에 실패하면 조용히 무시한다.
+      });
+  };
+
+  const addImage = (file: File) => {
+    addImageAt(file, sizeRef.current.width / 2, sizeRef.current.height / 2);
   };
 
   useImperativeHandle(
@@ -327,15 +407,93 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       deleteSelection,
       duplicateSelection,
       recolorSelection,
+      toggleCrop,
+      addImage,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
+  // ---- 텍스트 편집 (실제 DOM textarea로 입력받아 한글 IME 조합을 그대로 지원) ----
+
+  const commitEditingText = (cancel: boolean) => {
+    setEditingText((current) => {
+      if (!current) return null;
+
+      if (cancel) {
+        if (current.original) {
+          objectsRef.current = [...objectsRef.current, current.original];
+          redrawInk();
+        }
+        return null;
+      }
+
+      if (current.value.trim().length === 0) {
+        if (current.original) redrawInk(); // 기존 텍스트를 비웠다면 삭제된 채로 둔다.
+        return null;
+      }
+
+      const obj = createTextObject(current.x, current.y, current.value, current.color, current.fontSize);
+      if (current.original) obj.id = current.original.id;
+      objectsRef.current = [...objectsRef.current, obj];
+      redrawInk();
+      return null;
+    });
+  };
+
+  // 다른 도구로 바꾸면 편집 중이던 텍스트를 자동으로 확정한다.
+  useEffect(() => {
+    if (settings.tool !== "text") {
+      commitEditingText(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.tool]);
+
+  // ---- 레이저 포인터: 오브젝트를 만들지 않는 휘발성 트레일 애니메이션 ----
+
+  const runLaserLoop = () => {
+    const ctx = activeCtxRef.current;
+    if (!ctx) {
+      laserLoopRunningRef.current = false;
+      return;
+    }
+
+    const now = performance.now();
+    laserPointsRef.current = laserPointsRef.current.filter((p) => now - p.t < LASER_FADE_MS);
+
+    ctx.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
+    const color = settingsRef.current.laserColor;
+    for (const p of laserPointsRef.current) {
+      const life = Math.max(0, 1 - (now - p.t) / LASER_FADE_MS);
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = life * 0.85;
+      ctx.arc(p.x, p.y, 5 * life + 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (laserPointsRef.current.length > 0 || laserActiveRef.current) {
+      requestAnimationFrame(runLaserLoop);
+    } else {
+      laserLoopRunningRef.current = false;
+    }
+  };
+
+  const ensureLaserLoop = () => {
+    if (laserLoopRunningRef.current) return;
+    laserLoopRunningRef.current = true;
+    requestAnimationFrame(runLaserLoop);
+  };
+
   // 도구를 바꾸면 진행 중이던 드래프트/미리보기를 정리한다.
   useEffect(() => {
     shapeDraftRef.current = null;
     if (dragModeRef.current === "none") lassoDraftRef.current = null;
+    if (settings.tool !== "laser") {
+      laserPointsRef.current = [];
+      laserActiveRef.current = false;
+    }
 
     if (settings.tool === "eraser" && lastPointerRef.current) {
       drawEraserCursor(lastPointerRef.current.x, lastPointerRef.current.y);
@@ -386,6 +544,37 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     return () => observer.disconnect();
   }, []);
 
+  // 데스크탑 드래그 앤 드롭으로 이미지 추가 (도구 선택과 무관하게 항상 동작).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      const rect = container.getBoundingClientRect();
+      const dropX = e.clientX - rect.left;
+      const dropY = e.clientY - rect.top;
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith("image/")) continue;
+        addImageAt(file, dropX, dropY);
+      }
+    };
+
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("drop", handleDrop);
+    return () => {
+      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("drop", handleDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 키보드 단축키: Delete/Backspace 삭제, Ctrl/Cmd+C/X/V 복사/오려두기/붙여넣기 (올가미 도구일 때만).
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -431,11 +620,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         return;
       }
 
-      // 일반 모드: 스트로크는 부분 삭제(분할), 도형은 통째로 삭제.
+      // 일반 모드: 스트로크는 부분 삭제(분할), 그 외(도형/이미지/텍스트/스티커)는 통째로 삭제.
       let changed = false;
       const next: CanvasObject[] = [];
       for (const obj of objects) {
-        if (obj.objectType === "shape") {
+        if (obj.objectType !== "stroke") {
           if (hitTestObject(obj, x, y, radius)) {
             changed = true;
           } else {
@@ -504,9 +693,19 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       const pivotY = originalBounds.y;
       const newWidth = Math.max(10, point.x - pivotX);
       const newHeight = Math.max(10, point.y - pivotY);
-      // 종횡비를 유지하도록 두 축 중 더 작은 배율로 통일한다.
-      const scale = Math.min(newWidth / Math.max(originalBounds.width, 1), newHeight / Math.max(originalBounds.height, 1));
+      const scaleX = newWidth / Math.max(originalBounds.width, 1);
+      const scaleY = newHeight / Math.max(originalBounds.height, 1);
 
+      // 자르기 모드: 화면 박스 크기는 그대로 두고 이미지 안에서 샘플링하는 영역만 줄인다.
+      const single = originals.length === 1 ? originals[0] : null;
+      if (cropModeIdRef.current && single && single.objectType === "image" && single.id === cropModeIdRef.current) {
+        pendingPreviewRef.current = [cropImage(single, scaleX, scaleY)];
+        scheduleFrame(flushSelectionPreview);
+        return;
+      }
+
+      // 일반 리사이즈: 종횡비를 유지하도록 두 축 중 더 작은 배율로 통일한다.
+      const scale = Math.min(scaleX, scaleY);
       pendingPreviewRef.current = originals.map((o) => scaleObject(o, scale, scale, pivotX, pivotY));
       scheduleFrame(flushSelectionPreview);
     };
@@ -542,10 +741,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         return;
       }
 
-      selectedIdsRef.current = new Set(selected.map((o) => o.id));
+      const ids = new Set(selected.map((o) => o.id));
+      selectedIdsRef.current = ids;
       selectionBoundsRef.current = unionBounds(selected.map(getBounds));
       drawSelectionOverlay(selectionBoundsRef.current);
-      onSelectionChangeRef.current?.(true);
+      onSelectionChangeRef.current?.(computeSelectionInfo(ids));
     };
 
     const handlePointerDown = (e: PointerEvent) => {
@@ -577,6 +777,39 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
 
       if (s.tool === "lasso") {
         handleLassoPointerDown(point);
+        return;
+      }
+
+      if (s.tool === "sticker") {
+        const sticker = createStickerObject(s.stickerKind, point.x, point.y);
+        objectsRef.current = [...objectsRef.current, sticker];
+        redrawInk();
+        return;
+      }
+
+      if (s.tool === "image") {
+        return; // 이미지는 파일 선택/드래그앤드롭으로만 추가한다.
+      }
+
+      if (s.tool === "text") {
+        const hit = objectsRef.current.find(
+          (o) => o.objectType === "text" && pointInBounds(point.x, point.y, getBounds(o)),
+        ) as TextObject | undefined;
+
+        if (hit) {
+          objectsRef.current = objectsRef.current.filter((o) => o.id !== hit.id);
+          redrawInk();
+          setEditingText({ original: hit, x: hit.x, y: hit.y, value: hit.text, color: hit.color, fontSize: hit.fontSize });
+        } else {
+          setEditingText({ original: null, x: point.x, y: point.y, value: "", color: s.textColor, fontSize: s.textFontSize });
+        }
+        return;
+      }
+
+      if (s.tool === "laser") {
+        laserActiveRef.current = true;
+        laserPointsRef.current.push({ x: point.x, y: point.y, t: performance.now() });
+        ensureLaserLoop();
         return;
       }
 
@@ -633,6 +866,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         return;
       }
 
+      if (s.tool === "sticker" || s.tool === "image" || s.tool === "text") return;
+
+      if (s.tool === "laser") {
+        if (!laserActiveRef.current) return;
+        laserPointsRef.current.push({ x: point.x, y: point.y, t: performance.now() });
+        return;
+      }
+
       const stroke = currentStrokeRef.current;
       if (!stroke) return;
       stroke.points.push(point);
@@ -670,6 +911,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         return;
       }
 
+      if (s.tool === "sticker" || s.tool === "image" || s.tool === "text") return;
+
+      if (s.tool === "laser") {
+        laserActiveRef.current = false;
+        return;
+      }
+
       const stroke = currentStrokeRef.current;
       currentStrokeRef.current = null;
       if (!stroke || stroke.points.length === 0) return;
@@ -698,6 +946,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       active.removeEventListener("pointercancel", finishStroke);
       active.removeEventListener("pointerleave", handlePointerLeave);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -732,6 +981,35 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
           pointerEvents: "none",
         }}
       />
+      {editingText && (
+        <textarea
+          autoFocus
+          value={editingText.value}
+          onChange={(e) => setEditingText((cur) => (cur ? { ...cur, value: e.target.value } : cur))}
+          onBlur={() => commitEditingText(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              commitEditingText(true);
+            }
+          }}
+          style={{
+            position: "absolute",
+            left: editingText.x,
+            top: editingText.y,
+            minWidth: 140,
+            minHeight: editingText.fontSize * 1.3 + 8,
+            font: `${editingText.fontSize}px system-ui, "Segoe UI", sans-serif`,
+            color: editingText.color,
+            border: "1px dashed #1971c2",
+            background: "rgba(255,255,255,0.92)",
+            padding: 2,
+            resize: "both",
+            outline: "none",
+            zIndex: 10,
+          }}
+        />
+      )}
     </div>
   );
 });
