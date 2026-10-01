@@ -377,6 +377,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     if (!ids) return;
     const info = computeSelectionInfo(ids);
     if (!info.canCrop) return;
+    // 드래그 도중 자르기를 켜고 끄면 이후 pointermove가 이전 드래그 기준점으로 자르기/
+    // 리사이즈를 섞어서 적용하게 되므로, 모드를 바꾸기 전에 진행 중인 드래그를 정리한다.
+    cancelDrag();
     const [onlyId] = Array.from(ids);
     cropModeIdRef.current = cropModeIdRef.current === onlyId ? null : onlyId;
     if (selectionBoundsRef.current) drawSelectionOverlay(selectionBoundsRef.current);
@@ -415,30 +418,49 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   );
 
   // ---- 텍스트 편집 (실제 DOM textarea로 입력받아 한글 IME 조합을 그대로 지원) ----
+  //
+  // editingText는 textarea를 그리기 위한 React 상태지만, "편집 중인 세션이 있는지"를
+  // 포인터 이벤트 핸들러(ref 기반 클로저) 안에서 동기적으로 읽고 즉시 커밋해야 하는
+  // 경우가 있다 (예: A를 편집하다가 블러되기 전에 캔버스의 다른 지점을 바로 탭하는
+  // 경우 — pointerdown이 blur보다 먼저 발생하므로 state만 믿으면 A의 내용이 사라진다).
+  // 그래서 editingTextRef를 별도로 두고 항상 최신 세션을 미러링한다.
+  const editingTextRef = useRef<EditingText | null>(null);
+
+  const applyEditingTextCommit = (session: EditingText, cancel: boolean) => {
+    if (cancel) {
+      if (session.original) {
+        objectsRef.current = [...objectsRef.current, session.original];
+        redrawInk();
+      }
+      return;
+    }
+
+    if (session.value.trim().length === 0) {
+      if (session.original) redrawInk(); // 기존 텍스트를 비웠다면 삭제된 채로 둔다.
+      return;
+    }
+
+    const obj = createTextObject(session.x, session.y, session.value, session.color, session.fontSize);
+    if (session.original) obj.id = session.original.id;
+    objectsRef.current = [...objectsRef.current, obj];
+    redrawInk();
+  };
 
   const commitEditingText = (cancel: boolean) => {
-    setEditingText((current) => {
-      if (!current) return null;
+    const session = editingTextRef.current;
+    if (!session) return;
+    applyEditingTextCommit(session, cancel);
+    editingTextRef.current = null;
+    setEditingText(null);
+  };
 
-      if (cancel) {
-        if (current.original) {
-          objectsRef.current = [...objectsRef.current, current.original];
-          redrawInk();
-        }
-        return null;
-      }
-
-      if (current.value.trim().length === 0) {
-        if (current.original) redrawInk(); // 기존 텍스트를 비웠다면 삭제된 채로 둔다.
-        return null;
-      }
-
-      const obj = createTextObject(current.x, current.y, current.value, current.color, current.fontSize);
-      if (current.original) obj.id = current.original.id;
-      objectsRef.current = [...objectsRef.current, obj];
-      redrawInk();
-      return null;
-    });
+  // 편집 중인 세션이 있으면 먼저 확정하고 새 세션을 연다 (blur를 기다리지 않는다).
+  const openTextEditing = (session: EditingText) => {
+    if (editingTextRef.current) {
+      applyEditingTextCommit(editingTextRef.current, false);
+    }
+    editingTextRef.current = session;
+    setEditingText(session);
   };
 
   // 다른 도구로 바꾸면 편집 중이던 텍스트를 자동으로 확정한다.
@@ -486,10 +508,23 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     requestAnimationFrame(runLaserLoop);
   };
 
+  // 레이저를 누른 채로 컴포넌트가 언마운트되면(드물지만) laserActiveRef가 true로 남아
+  // rAF 루프가 영원히 스스로를 재예약할 수 있으므로, 언마운트 시 강제로 멈춘다.
+  useEffect(() => {
+    return () => {
+      laserActiveRef.current = false;
+      laserPointsRef.current = [];
+    };
+  }, []);
+
   // 도구를 바꾸면 진행 중이던 드래프트/미리보기를 정리한다.
   useEffect(() => {
+    // 이동/크기조정 드래그 도중 도구가 바뀌면(터치 멀티탭, 키보드 단축키 등) 드래그를
+    // 먼저 취소해서 잉크 레이어를 원래대로 되돌린다 — 그렇지 않으면 미리보기 때문에
+    // 잠시 숨겨둔 오브젝트가 objectsRef에는 그대로 있지만 화면에서만 사라진 채로 남는다.
+    cancelDrag();
     shapeDraftRef.current = null;
-    if (dragModeRef.current === "none") lassoDraftRef.current = null;
+    lassoDraftRef.current = null;
     if (settings.tool !== "laser") {
       laserPointsRef.current = [];
       laserActiveRef.current = false;
@@ -560,9 +595,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       const rect = container.getBoundingClientRect();
       const dropX = e.clientX - rect.left;
       const dropY = e.clientY - rect.top;
+      let placed = 0;
       for (const file of Array.from(files)) {
         if (!file.type.startsWith("image/")) continue;
-        addImageAt(file, dropX, dropY);
+        // 한 번에 여러 장을 놓으면 서로 겹치지 않도록 조금씩 어긋나게 배치한다.
+        const offset = placed * 24;
+        addImageAt(file, dropX + offset, dropY + offset);
+        placed++;
       }
     };
 
@@ -799,9 +838,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         if (hit) {
           objectsRef.current = objectsRef.current.filter((o) => o.id !== hit.id);
           redrawInk();
-          setEditingText({ original: hit, x: hit.x, y: hit.y, value: hit.text, color: hit.color, fontSize: hit.fontSize });
+          openTextEditing({ original: hit, x: hit.x, y: hit.y, value: hit.text, color: hit.color, fontSize: hit.fontSize });
         } else {
-          setEditingText({ original: null, x: point.x, y: point.y, value: "", color: s.textColor, fontSize: s.textFontSize });
+          openTextEditing({ original: null, x: point.x, y: point.y, value: "", color: s.textColor, fontSize: s.textFontSize });
         }
         return;
       }
@@ -985,7 +1024,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         <textarea
           autoFocus
           value={editingText.value}
-          onChange={(e) => setEditingText((cur) => (cur ? { ...cur, value: e.target.value } : cur))}
+          onChange={(e) =>
+            setEditingText((cur) => {
+              if (!cur) return cur;
+              const next = { ...cur, value: e.target.value };
+              editingTextRef.current = next;
+              return next;
+            })
+          }
           onBlur={() => commitEditingText(false)}
           onKeyDown={(e) => {
             if (e.key === "Escape") {

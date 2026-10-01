@@ -73,9 +73,13 @@ export function renderImage(ctx: CanvasRenderingContext2D, obj: ImageObject) {
 // 샘플링하는 영역(cropWidth/Height)만 줄여서 "확대해서 자르는" 느낌을 낸다. 좌상단을
 // 기준점으로 고정해 기존 리사이즈 핸들 하나로 자르기까지 처리할 수 있게 했다.
 export function cropImage(obj: ImageObject, scaleX: number, scaleY: number): ImageObject {
+  // 핸들을 바깥으로 끌면 원본 밖을 샘플링하게 되어 빈 여백이 보이므로, 원본 크기를
+  // 넘지 않도록(= 100% 확대 이상으로 "축소"되지 않도록) 상한을 둔다.
+  const maxWidth = obj.element.naturalWidth - obj.cropX;
+  const maxHeight = obj.element.naturalHeight - obj.cropY;
   return {
     ...obj,
-    cropWidth: Math.max(10, obj.cropWidth * scaleX),
-    cropHeight: Math.max(10, obj.cropHeight * scaleY),
+    cropWidth: Math.min(maxWidth, Math.max(10, obj.cropWidth * scaleX)),
+    cropHeight: Math.min(maxHeight, Math.max(10, obj.cropHeight * scaleY)),
   };
 }
