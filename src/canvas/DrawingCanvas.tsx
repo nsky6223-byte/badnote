@@ -1,5 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { normalizePointerEvent, type PointerKind } from "./engine/pointerInput";
+import { engineHooks } from "./engine/hooks";
+import { inputPipeline } from "./engine/inputPipeline";
 import { createImageObject, cropImage, loadImageFromFile } from "./engine/imageEngine";
 import {
   boundsFromPoints,
@@ -237,6 +239,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     clearSelection();
     notifyHistoryChange();
     scheduleSave();
+    engineHooks.emit("history:undo", {});
   };
 
   const redo = () => {
@@ -249,6 +252,18 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     clearSelection();
     notifyHistoryChange();
     scheduleSave();
+    engineHooks.emit("history:redo", {});
+  };
+
+  // object:commit/erase 훅은 반드시 "실제로 objectsRef.current가 바뀐 뒤" 호출해서
+  // all이 최신 상태를 가리키게 한다 (pushHistory는 반대로 바뀌기 전 상태를 캡처해야 하므로
+  // 호출 순서가 섞이지 않도록 주의).
+  const emitObjectCommit = (object: CanvasObject) => {
+    engineHooks.emit("object:commit", { object, all: objectsRef.current });
+  };
+
+  const emitErase = () => {
+    engineHooks.emit("erase", { all: objectsRef.current });
   };
 
   // 지우개 도구일 때 실제 지워지는 범위를 검은 원 테두리로 미리 보여준다.
@@ -379,6 +394,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     redrawInk();
     clearActive();
     if (selectionBoundsRef.current) drawSelectionOverlay(selectionBoundsRef.current);
+    for (const obj of preview) emitObjectCommit(obj);
   };
 
   // ---- 선택 오브젝트에 대한 액션 (툴바/키보드에서 ref로 호출) ----
@@ -415,6 +431,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     objectsRef.current = objectsRef.current.filter((o) => !ids.has(o.id));
     redrawInk();
     clearSelection();
+    emitErase();
   };
 
   const cutSelection = () => {
@@ -437,6 +454,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     selectionBoundsRef.current = unionBounds(clones.map(getBounds));
     drawSelectionOverlay(selectionBoundsRef.current);
     onSelectionChangeRef.current?.(computeSelectionInfo(newIds));
+    for (const obj of clones) emitObjectCommit(obj);
   };
 
   const recolorSelection = (color: string) => {
@@ -461,6 +479,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     selectionBoundsRef.current = unionBounds(clones.map(getBounds));
     drawSelectionOverlay(selectionBoundsRef.current);
     onSelectionChangeRef.current?.(computeSelectionInfo(newIds));
+    for (const obj of clones) emitObjectCommit(obj);
   };
 
   const toggleCrop = () => {
@@ -484,6 +503,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         const obj = createImageObject(element, centerX, centerY);
         objectsRef.current = [...objectsRef.current, obj];
         redrawInk();
+        emitObjectCommit(obj);
       })
       .catch(() => {
         // 잘못된 파일 등으로 로드에 실패하면 조용히 무시한다.
@@ -534,6 +554,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         // 기존 텍스트를 비워서 삭제한 셈 — 편집 시작 전 상태를 undo에 남긴다.
         pushHistorySnapshot(session.preEditObjects);
         redrawInk();
+        emitErase();
       }
       return;
     }
@@ -543,6 +564,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     if (session.original) obj.id = session.original.id;
     objectsRef.current = [...objectsRef.current, obj];
     redrawInk();
+    emitObjectCommit(obj);
   };
 
   const commitEditingText = (cancel: boolean) => {
@@ -615,6 +637,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       laserPointsRef.current = [];
     };
   }, []);
+
+  // 도구가 바뀔 때마다 훅으로 알린다 (지우개 레벨 변경은 도구 변경이 아니므로 제외).
+  useEffect(() => {
+    engineHooks.emit("tool:change", { tool: settings.tool });
+  }, [settings.tool]);
 
   // 도구를 바꾸면 진행 중이던 드래프트/미리보기를 정리한다.
   useEffect(() => {
@@ -810,6 +837,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
           pushEraseHistoryOnce();
           objectsRef.current = next;
           redrawInk();
+          emitErase();
         }
         return;
       }
@@ -834,6 +862,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         pushEraseHistoryOnce();
         objectsRef.current = next;
         redrawInk();
+        emitErase();
       }
     };
 
@@ -920,6 +949,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       pushHistory();
       objectsRef.current = [...objectsRef.current, shape];
       redrawInk();
+      emitObjectCommit(shape);
     };
 
     const finalizeLasso = () => {
@@ -982,6 +1012,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         const sticker = createStickerObject(s.stickerKind, point.x, point.y);
         objectsRef.current = [...objectsRef.current, sticker];
         redrawInk();
+        emitObjectCommit(sticker);
         return;
       }
 
@@ -1043,8 +1074,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         isHighlighter ? 0.35 : 1,
         e.pointerType as PointerKind,
       );
-      stroke.points.push(point);
+      const processedPoint = inputPipeline.process(point, { toolKind: stroke.kind });
+      stroke.points.push(processedPoint);
       currentStrokeRef.current = stroke;
+      engineHooks.emit("stroke:start", { stroke });
+      engineHooks.emit("stroke:point", { point: processedPoint, stroke });
       scheduleFrame(redrawActive);
     };
 
@@ -1096,7 +1130,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
 
       const stroke = currentStrokeRef.current;
       if (!stroke) return;
-      stroke.points.push(point);
+      const processedPoint = inputPipeline.process(point, { toolKind: stroke.kind });
+      stroke.points.push(processedPoint);
+      engineHooks.emit("stroke:point", { point: processedPoint, stroke });
       scheduleFrame(redrawActive);
     };
 
@@ -1146,6 +1182,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       objectsRef.current = [...objectsRef.current, stroke];
       redrawInk();
       clearActive();
+      emitObjectCommit(stroke);
     };
 
     const handlePointerLeave = (e: PointerEvent) => {
