@@ -1,0 +1,97 @@
+.event-debug-toggle {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 100;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #ced4da;
+  background: #fff;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.event-debug-panel {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 100;
+  width: 260px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #ced4da;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  font-size: 12px;
+  color: #1a1a1a;
+}
+
+.event-debug-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e9ecef;
+  font-weight: 600;
+}
+
+.event-debug-panel__header button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: #868e96;
+}
+
+.event-debug-panel__section {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f1f3f5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-debug-panel__label {
+  font-weight: 600;
+  color: #495057;
+}
+
+.event-debug-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.event-debug-panel__row--wrap {
+  flex-wrap: wrap;
+}
+
+.event-debug-panel__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.event-debug-panel__seed-input {
+  width: 80px;
+  padding: 3px 6px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+}
+
+.event-debug-panel__force-btn {
+  padding: 3px 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  background: #f8f9fa;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.event-debug-panel__force-btn:hover {
+  background: #e9ecef;
+}

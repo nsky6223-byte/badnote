@@ -54,6 +54,8 @@ export interface EventContext {
   updateObject(id: string, patch: Partial<CanvasObject>): void;
   pauseInput(): void;
   resumeInput(): void;
+  // render/ui 글리치처럼 데이터는 안 바꾸고(undo 이력 없이) 화면만 다시 그려야 할 때.
+  requestRedraw(): void;
 }
 
 export interface EventModule {

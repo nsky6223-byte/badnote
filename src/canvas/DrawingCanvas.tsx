@@ -18,6 +18,7 @@ import {
 } from "./engine/strokeEngine";
 import { createTextObject, type TextObject } from "./engine/textEngine";
 import { loadNote, saveNote } from "./engine/persistence";
+import { eventRuntime } from "../events/core/runtime";
 import {
   duplicateObject,
   getBounds,
@@ -142,6 +143,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   const sizeRef = useRef({ width: 0, height: 0 });
   const lastPointerRef = useRef<Pt | null>(null);
   const activePenIdRef = useRef<number | null>(null);
+  // 미니게임이 열려있는 동안 등 이벤트 시스템이 EngineAdapter.pauseInput()으로 끌 수 있는
+  // 입력 잠금. true인 동안은 포인터 입력을 전부 무시한다.
+  const inputPausedRef = useRef(false);
 
   const [editingText, setEditingText] = useState<EditingText | null>(null);
 
@@ -735,6 +739,44 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
+  // 이벤트 시스템(글리치/밈/미니게임) 런타임을 시작한다. 엔진은 이벤트의 존재를
+  // 모르지만, 이벤트가 노트를 조작할 수 있도록 좁은 EngineAdapter 하나는 등록해줘야 한다.
+  // EVENTS_SPEC.md 9장 "data 글리치·미니게임 결과를 Undo로 되돌릴 수 있나"는 아직
+  // 팀 결정이 안 나서, 가장 단순하고 기존 동작과 일관된 "허용"을 기본값으로 삼았다
+  // (pushHistory를 거치므로 다른 모든 변경과 똑같이 undo/redo된다).
+  useEffect(() => {
+    const stop = eventRuntime.start({
+      adapter: {
+        getObjects: () => objectsRef.current,
+        addObjects: (objects) => {
+          if (objects.length === 0) return;
+          pushHistory();
+          objectsRef.current = [...objectsRef.current, ...objects];
+          redrawInk();
+          for (const obj of objects) emitObjectCommit(obj);
+        },
+        updateObject: (id, patch) => {
+          const exists = objectsRef.current.some((o) => o.id === id);
+          if (!exists) return;
+          pushHistory();
+          objectsRef.current = objectsRef.current.map((o) =>
+            o.id === id ? ({ ...o, ...patch } as CanvasObject) : o,
+          );
+          redrawInk();
+        },
+        pauseInput: () => {
+          inputPausedRef.current = true;
+        },
+        resumeInput: () => {
+          inputPausedRef.current = false;
+        },
+        requestRedraw: () => redrawInk(),
+      },
+    });
+    return stop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 데스크탑 드래그 앤 드롭으로 이미지 추가 (도구 선택과 무관하게 항상 동작).
   useEffect(() => {
     const container = containerRef.current;
@@ -975,6 +1017,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     };
 
     const handlePointerDown = (e: PointerEvent) => {
+      if (inputPausedRef.current) return; // 미니게임 등이 열려있는 동안은 필기를 막는다.
       if (e.pointerType === "touch" && activePenIdRef.current !== null) {
         // 펜 사용 중 발생한 손바닥 등의 터치는 무시한다.
         e.preventDefault();
@@ -1083,6 +1126,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     };
 
     const handlePointerMove = (e: PointerEvent) => {
+      if (inputPausedRef.current) return;
       if (e.pointerType === "touch" && activePenIdRef.current !== null) return;
 
       const point = normalizePointerEvent(e, active);

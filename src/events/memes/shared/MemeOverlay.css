@@ -1,0 +1,14 @@
+.meme-overlay {
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.meme-overlay--visible {
+  opacity: 1;
+}
+
+.meme-overlay--exit {
+  opacity: 0;
+}

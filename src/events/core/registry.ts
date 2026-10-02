@@ -1,10 +1,9 @@
 // 모든 이벤트를 등록하는 곳. EVENTS_SPEC.md 5-1장: "새 이벤트 추가 시 해당 폴더 생성 +
 // registry.ts에 한 줄 추가 외에 다른 파일을 수정하지 않는다."
-//
-// 아직 실제 이벤트(글리치/밈/미니게임)는 하나도 만들지 않았으므로 등록된 목록은 비어
-// 있다. 각 이벤트 폴더(예: glitches/inkBleed/index.ts)가 완성되면 이 파일에
-// registerEvent(inkBleed) 한 줄을 추가하는 식으로 채워나간다.
 
+import { inkBleedEvent } from "../glitches/inkBleed";
+import { catEvent } from "../memes/cat";
+import { omokEvent } from "../minigames/omok";
 import type { EventCategory, GameEvent } from "./types";
 
 const registry: GameEvent[] = [];
@@ -17,6 +16,10 @@ export function registerEvent(event: GameEvent): void {
   idSet.add(event.id);
   registry.push(event);
 }
+
+registerEvent(inkBleedEvent);
+registerEvent(catEvent);
+registerEvent(omokEvent);
 
 export function getAllEvents(): readonly GameEvent[] {
   return registry;

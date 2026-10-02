@@ -1,0 +1,53 @@
+.omok-game {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.omok-game__status {
+  margin: 0;
+  font-size: 14px;
+  color: #495057;
+  min-height: 20px;
+}
+
+.omok-game__board {
+  display: grid;
+  gap: 2px;
+  background: #d9b36c;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.omok-game__cell {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: #e8c892;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.omok-game__cell:disabled {
+  cursor: default;
+}
+
+.omok-game__stone {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: block;
+}
+
+.omok-game__stone--black {
+  background: #1a1a1a;
+}
+
+.omok-game__stone--white {
+  background: #f1f3f5;
+  border: 1px solid #ced4da;
+}

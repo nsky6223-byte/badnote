@@ -4,6 +4,7 @@
 // (x,y,width,height) 기반이라, 박스 타입들은 대부분 한 분기로 같이 처리한다.
 
 import { renderImage, type ImageObject } from "./imageEngine";
+import { renderOverrides } from "./renderPipeline";
 import { renderShape, type Pt, type ShapeObject } from "./shapeEngine";
 import { renderSticker, type StickerObject } from "./stickerEngine";
 import { renderStroke, type Stroke } from "./strokeEngine";
@@ -133,6 +134,15 @@ export function objectIntersectsLasso(obj: CanvasObject, polygon: Pt[]): boolean
 }
 
 export function renderObject(ctx: CanvasRenderingContext2D, obj: CanvasObject) {
+  // render 글리치가 걸려 있으면(EVENTS_SPEC.md 2-1장) 데이터는 그대로 두고 그리는
+  // 방식만 일시적으로 바꾼다. 평소엔 오버라이드가 없어 그냥 통과한다.
+  const override = renderOverrides.get(obj.id);
+  if (override) {
+    ctx.save();
+    if (override.filter) ctx.filter = override.filter;
+    if (override.globalAlpha !== undefined) ctx.globalAlpha = override.globalAlpha;
+  }
+
   switch (obj.objectType) {
     case "shape":
       renderShape(ctx, obj);
@@ -149,6 +159,8 @@ export function renderObject(ctx: CanvasRenderingContext2D, obj: CanvasObject) {
     default:
       renderStroke(ctx, obj);
   }
+
+  if (override) ctx.restore();
 }
 
 export function redrawObjects(

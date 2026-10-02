@@ -5,6 +5,7 @@ import DrawingCanvas, {
   type SelectionInfo,
 } from "./canvas/DrawingCanvas";
 import Toolbar from "./components/Toolbar";
+import EventDebugPanel from "./dev/EventDebugPanel";
 import { DEFAULT_SETTINGS, type DrawSettings } from "./settings";
 
 const NO_SELECTION: SelectionInfo = {
@@ -51,6 +52,7 @@ function App() {
           onHistoryChange={setHistory}
         />
       </div>
+      {import.meta.env.DEV && <EventDebugPanel />}
     </div>
   );
 }

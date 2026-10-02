@@ -1,0 +1,35 @@
+.cat-walker {
+  position: absolute;
+  bottom: 24px;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.cat-walker--from-left {
+  left: -80px;
+  animation-name: cat-walk-right;
+}
+
+.cat-walker--from-right {
+  right: -80px;
+  animation-name: cat-walk-left;
+  transform: scaleX(-1);
+}
+
+@keyframes cat-walk-right {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(100vw + 80px));
+  }
+}
+
+@keyframes cat-walk-left {
+  from {
+    transform: scaleX(-1) translateX(0);
+  }
+  to {
+    transform: scaleX(-1) translateX(calc(-100vw - 80px));
+  }
+}
