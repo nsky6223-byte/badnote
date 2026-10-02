@@ -831,6 +831,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       }
 
       if (s.tool === "text") {
+        // 캔버스는 포커스를 받을 수 없는 요소라서, 이 클릭이 끝날 때(mouseup) 브라우저가
+        // 기본 동작으로 포커스를 되돌리면서 방금 autoFocus로 포커스를 준 textarea가
+        // blur되어 버린다 — 그 blur가 즉시 commitEditingText를 호출해 입력창이 뜨자마자
+        // 사라지는 원인이었다. preventDefault로 그 기본 포커스 처리를 막는다.
+        e.preventDefault();
         const hit = objectsRef.current.find(
           (o) => o.objectType === "text" && pointInBounds(point.x, point.y, getBounds(o)),
         ) as TextObject | undefined;
