@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import "./Toolbar.css";
-import type { SelectionInfo } from "../canvas/DrawingCanvas";
+import type { HistoryInfo, SelectionInfo } from "../canvas/DrawingCanvas";
 import type {
   EraserMode,
   EraserSizeLevel,
@@ -69,6 +69,9 @@ type Props = {
   onRecolor: (color: string) => void;
   onToggleCrop: () => void;
   onAddImage: (file: File) => void;
+  history: HistoryInfo;
+  onUndo: () => void;
+  onRedo: () => void;
 };
 
 export default function Toolbar({
@@ -82,12 +85,24 @@ export default function Toolbar({
   onRecolor,
   onToggleCrop,
   onAddImage,
+  history,
+  onUndo,
+  onRedo,
 }: Props) {
   const { tool } = settings;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   return (
     <div className="toolbar">
+      <div className="toolbar-group">
+        <button type="button" className="tool-btn" onClick={onUndo} disabled={!history.canUndo}>
+          실행취소
+        </button>
+        <button type="button" className="tool-btn" onClick={onRedo} disabled={!history.canRedo}>
+          다시실행
+        </button>
+      </div>
+
       <div className="toolbar-group">
         {(Object.keys(TOOL_LABELS) as ToolKind[]).map((t) => (
           <button

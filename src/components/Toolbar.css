@@ -26,6 +26,11 @@
   font-size: 14px;
 }
 
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .tool-btn.active {
   background: #1971c2;
   border-color: #1971c2;

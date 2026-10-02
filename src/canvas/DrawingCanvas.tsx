@@ -15,6 +15,7 @@ import {
   type Stroke,
 } from "./engine/strokeEngine";
 import { createTextObject, type TextObject } from "./engine/textEngine";
+import { loadNote, saveNote } from "./engine/persistence";
 import {
   duplicateObject,
   getBounds,
@@ -46,6 +47,11 @@ const NO_SELECTION: SelectionInfo = {
   cropActive: false,
 };
 
+export type HistoryInfo = {
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
 export type DrawingCanvasHandle = {
   copySelection: () => void;
   cutSelection: () => void;
@@ -54,11 +60,14 @@ export type DrawingCanvasHandle = {
   recolorSelection: (color: string) => void;
   toggleCrop: () => void;
   addImage: (file: File) => void;
+  undo: () => void;
+  redo: () => void;
 };
 
 type Props = {
   settings: DrawSettings;
   onSelectionChange?: (info: SelectionInfo) => void;
+  onHistoryChange?: (info: HistoryInfo) => void;
 };
 
 const HANDLE_SIZE = 14;
@@ -75,6 +84,7 @@ function getHandleRect(bounds: Bounds): Bounds {
 
 type EditingText = {
   original: TextObject | null; // 기존 오브젝트를 편집 중이면 취소 시 복원하기 위해 보관.
+  preEditObjects: CanvasObject[]; // 편집 시작 전 objectsRef 스냅샷 (undo에 이 상태로 남긴다)
   x: number;
   y: number;
   value: string;
@@ -83,7 +93,7 @@ type EditingText = {
 };
 
 const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCanvas(
-  { settings, onSelectionChange },
+  { settings, onSelectionChange, onHistoryChange },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -112,6 +122,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   const clipboardRef = useRef<CanvasObject[]>([]);
   const cropModeIdRef = useRef<string | null>(null);
 
+  // Undo/Redo: objectsRef가 바뀔 때마다 "바뀌기 전" 배열 참조를 스택에 쌓는다. 배열은
+  // 매번 새로 만들어 교체할 뿐 제자리에서 mutate하지 않으므로, 옛 참조를 그대로 보관해도
+  // 안전하다 (복제 비용 없음).
+  const undoStackRef = useRef<CanvasObject[][]>([]);
+  const redoStackRef = useRef<CanvasObject[][]>([]);
+  const eraseGestureHistoryPushedRef = useRef(false);
+
+  // 로컬 저장: 변경 후 일정 시간 조용하면 IndexedDB에 저장한다.
+  const saveTimerRef = useRef<number | null>(null);
+
   // 레이저 포인터: 오브젝트로 커밋되지 않는 휘발성 트레일이라 objectsRef와 무관하게 관리.
   const laserPointsRef = useRef<{ x: number; y: number; t: number }[]>([]);
   const laserActiveRef = useRef(false);
@@ -132,6 +152,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange;
   }, [onSelectionChange]);
+
+  const onHistoryChangeRef = useRef(onHistoryChange);
+  useEffect(() => {
+    onHistoryChangeRef.current = onHistoryChange;
+  }, [onHistoryChange]);
 
   const pendingFrameRef = useRef(false);
   const scheduleFrame = (draw: () => void) => {
@@ -163,6 +188,67 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
 
   const clearSelectionLayer = () => {
     selectionCtxRef.current?.clearRect(0, 0, sizeRef.current.width, sizeRef.current.height);
+  };
+
+  // ---- Undo/Redo + 로컬 저장 ----
+  //
+  // 실제 오브젝트 변경(스트로크 커밋, 지우개, 도형/스티커/이미지/텍스트 추가, 삭제/복제/
+  // 색상변경, 선택 이동·크기조정 커밋)이 일어나는 모든 지점에서 pushHistory()를 호출한다.
+  // history를 남기는 시점 = 저장해야 하는 시점이기도 하므로, 저장 예약도 여기서 함께 한다.
+
+  const MAX_HISTORY = 50;
+  const SAVE_DEBOUNCE_MS = 1500;
+
+  const notifyHistoryChange = () => {
+    onHistoryChangeRef.current?.({
+      canUndo: undoStackRef.current.length > 0,
+      canRedo: redoStackRef.current.length > 0,
+    });
+  };
+
+  const scheduleSave = () => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      saveNote(objectsRef.current).catch(() => {});
+    }, SAVE_DEBOUNCE_MS);
+  };
+
+  // snapshot: "바뀌기 전" 오브젝트 배열. 대부분은 objectsRef.current를 그대로 넘기면 되지만,
+  // 텍스트 편집처럼 "편집 시작 시점"과 "커밋 시점" 사이에 다른 변경이 끼어있는 경우를 위해
+  // 호출부가 직접 snapshot을 지정할 수 있게 열어둔다.
+  const pushHistorySnapshot = (snapshot: CanvasObject[]) => {
+    undoStackRef.current.push(snapshot);
+    if (undoStackRef.current.length > MAX_HISTORY) undoStackRef.current.shift();
+    redoStackRef.current = [];
+    notifyHistoryChange();
+    scheduleSave();
+  };
+
+  const pushHistory = () => pushHistorySnapshot(objectsRef.current);
+
+  const undo = () => {
+    const prev = undoStackRef.current.pop();
+    if (!prev) return;
+    cancelDrag();
+    redoStackRef.current.push(objectsRef.current);
+    objectsRef.current = prev;
+    redrawInk();
+    clearSelection();
+    notifyHistoryChange();
+    scheduleSave();
+  };
+
+  const redo = () => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    cancelDrag();
+    undoStackRef.current.push(objectsRef.current);
+    objectsRef.current = next;
+    redrawInk();
+    clearSelection();
+    notifyHistoryChange();
+    scheduleSave();
   };
 
   // 지우개 도구일 때 실제 지워지는 범위를 검은 원 테두리로 미리 보여준다.
@@ -284,6 +370,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
 
     if (!ids || !preview) return;
 
+    pushHistory();
     objectsRef.current = objectsRef.current.filter((o) => !ids.has(o.id)).concat(preview);
     selectionBoundsRef.current = previewBoundsRef.current;
     previewObjectsRef.current = null;
@@ -324,6 +411,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     const ids = selectedIdsRef.current;
     if (!ids) return;
     cancelDrag();
+    pushHistory();
     objectsRef.current = objectsRef.current.filter((o) => !ids.has(o.id));
     redrawInk();
     clearSelection();
@@ -339,6 +427,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     if (!ids) return;
     cancelDrag();
     cropModeIdRef.current = null;
+    pushHistory();
     const originals = objectsRef.current.filter((o) => ids.has(o.id));
     const clones = originals.map((o) => duplicateObject(o));
     objectsRef.current = [...objectsRef.current, ...clones];
@@ -354,6 +443,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     const ids = selectedIdsRef.current;
     if (!ids) return;
     cancelDrag();
+    pushHistory();
     objectsRef.current = objectsRef.current.map((o) => (ids.has(o.id) ? recolorObject(o, color) : o));
     redrawInk();
   };
@@ -362,6 +452,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     if (clipboardRef.current.length === 0) return;
     cancelDrag();
     cropModeIdRef.current = null;
+    pushHistory();
     const clones = clipboardRef.current.map((o) => duplicateObject(o));
     objectsRef.current = [...objectsRef.current, ...clones];
     redrawInk();
@@ -389,6 +480,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
   const addImageAt = (file: File, centerX: number, centerY: number) => {
     loadImageFromFile(file)
       .then((element) => {
+        pushHistory();
         const obj = createImageObject(element, centerX, centerY);
         objectsRef.current = [...objectsRef.current, obj];
         redrawInk();
@@ -412,6 +504,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       recolorSelection,
       toggleCrop,
       addImage,
+      undo,
+      redo,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -436,10 +530,15 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     }
 
     if (session.value.trim().length === 0) {
-      if (session.original) redrawInk(); // 기존 텍스트를 비웠다면 삭제된 채로 둔다.
+      if (session.original) {
+        // 기존 텍스트를 비워서 삭제한 셈 — 편집 시작 전 상태를 undo에 남긴다.
+        pushHistorySnapshot(session.preEditObjects);
+        redrawInk();
+      }
       return;
     }
 
+    pushHistorySnapshot(session.preEditObjects);
     const obj = createTextObject(session.x, session.y, session.value, session.color, session.fontSize);
     if (session.original) obj.id = session.original.id;
     objectsRef.current = [...objectsRef.current, obj];
@@ -579,6 +678,36 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     return () => observer.disconnect();
   }, []);
 
+  // 저장된 노트 불러오기 (새로고침/재방문 시 복원). 이미지 디코딩이 끼어있어 비동기다.
+  useEffect(() => {
+    let cancelled = false;
+    loadNote()
+      .then((objects) => {
+        if (cancelled || objects.length === 0) return;
+        objectsRef.current = objects;
+        redrawInk();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 페이지를 벗어날 때 디바운스를 기다리지 않고 바로 저장을 시도한다 (완료 보장은 안 되지만
+  // 대부분의 브라우저에서 짧은 동기적 저장 정도는 끝까지 처리해준다).
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      saveNote(objectsRef.current).catch(() => {});
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
   // 데스크탑 드래그 앤 드롭으로 이미지 추가 (도구 선택과 무관하게 항상 동작).
   useEffect(() => {
     const container = containerRef.current;
@@ -614,12 +743,29 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 키보드 단축키: Delete/Backspace 삭제, Ctrl/Cmd+C/X/V 복사/오려두기/붙여넣기 (올가미 도구일 때만).
+  // 키보드 단축키: Ctrl/Cmd+Z 실행취소, Shift+Z 또는 Y 다시실행 (도구 무관),
+  // Delete/Backspace 삭제, Ctrl/Cmd+C/X/V 복사/오려두기/붙여넣기 (올가미 도구일 때만).
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (settingsRef.current.tool !== "lasso") return;
+      // 텍스트 편집 중(textarea에 포커스)에는 브라우저 자체의 입력 되돌리기/복사 등을
+      // 그대로 쓸 수 있어야 하므로 우리 단축키 처리를 건너뛴다.
+      if (e.target instanceof HTMLTextAreaElement) return;
+
       const key = e.key.toLowerCase();
       const meta = e.ctrlKey || e.metaKey;
+
+      if (meta && key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (meta && (key === "y" || (key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
+      if (settingsRef.current.tool !== "lasso") return;
 
       if ((e.key === "Delete" || e.key === "Backspace") && selectedIdsRef.current) {
         e.preventDefault();
@@ -645,6 +791,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
     const active = activeCanvasRef.current;
     if (!active) return;
 
+    // 누르고 있는 동안 eraseAt가 pointermove마다 반복 호출되지만, 하나의 지우개 제스처는
+    // undo에서 한 단계여야 하므로 그 제스처의 "첫 실제 변경"에서만 history를 남긴다.
+    const pushEraseHistoryOnce = () => {
+      if (eraseGestureHistoryPushedRef.current) return;
+      eraseGestureHistoryPushedRef.current = true;
+      pushHistory();
+    };
+
     const eraseAt = (x: number, y: number) => {
       const s = settingsRef.current;
       const radius = ERASER_RADIUS[s.eraserLevel];
@@ -653,6 +807,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       if (s.eraserMode === "stroke") {
         const next = objects.filter((o) => !hitTestObject(o, x, y, radius));
         if (next.length !== objects.length) {
+          pushEraseHistoryOnce();
           objectsRef.current = next;
           redrawInk();
         }
@@ -676,6 +831,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         next.push(...fragments);
       }
       if (changed) {
+        pushEraseHistoryOnce();
         objectsRef.current = next;
         redrawInk();
       }
@@ -761,6 +917,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       const bounds = boundsFromPoints(draft);
       const s = settingsRef.current;
       const shape = createShapeObject(kind, bounds, s.shapeColor, s.shapeStrokeWidth);
+      pushHistory();
       objectsRef.current = [...objectsRef.current, shape];
       redrawInk();
     };
@@ -803,6 +960,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       const s = settingsRef.current;
 
       if (s.tool === "eraser") {
+        eraseGestureHistoryPushedRef.current = false;
         eraseAt(point.x, point.y);
         drawEraserCursor(point.x, point.y);
         return;
@@ -820,6 +978,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       }
 
       if (s.tool === "sticker") {
+        pushHistory();
         const sticker = createStickerObject(s.stickerKind, point.x, point.y);
         objectsRef.current = [...objectsRef.current, sticker];
         redrawInk();
@@ -841,11 +1000,28 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
         ) as TextObject | undefined;
 
         if (hit) {
+          const preEditObjects = objectsRef.current; // 제거 전 스냅샷 (undo용)
           objectsRef.current = objectsRef.current.filter((o) => o.id !== hit.id);
           redrawInk();
-          openTextEditing({ original: hit, x: hit.x, y: hit.y, value: hit.text, color: hit.color, fontSize: hit.fontSize });
+          openTextEditing({
+            original: hit,
+            preEditObjects,
+            x: hit.x,
+            y: hit.y,
+            value: hit.text,
+            color: hit.color,
+            fontSize: hit.fontSize,
+          });
         } else {
-          openTextEditing({ original: null, x: point.x, y: point.y, value: "", color: s.textColor, fontSize: s.textFontSize });
+          openTextEditing({
+            original: null,
+            preEditObjects: objectsRef.current,
+            x: point.x,
+            y: point.y,
+            value: "",
+            color: s.textColor,
+            fontSize: s.textFontSize,
+          });
         }
         return;
       }
@@ -966,6 +1142,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(function DrawingCan
       currentStrokeRef.current = null;
       if (!stroke || stroke.points.length === 0) return;
 
+      pushHistory();
       objectsRef.current = [...objectsRef.current, stroke];
       redrawInk();
       clearActive();
